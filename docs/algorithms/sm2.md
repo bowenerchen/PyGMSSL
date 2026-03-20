@@ -87,6 +87,18 @@ flowchart TD
 - \( s = (1+d)^{-1}(k - r \cdot d) \bmod n \)
 - 验签：\( s \cdot G + t \cdot P \) 的 x 坐标满足 \( x_1 + e \equiv r \pmod{n} \)
 
+### 4.4 hazmat 签名线格式（与 eet `-m` 对齐）
+
+`SM2PrivateKey.sign` / `SM2PublicKey.verify` 的 ``signature_format``：
+
+| `signature_format` | 说明 |
+|--------------------|------|
+| `None`（默认） | 64 字节 **r \|\| s**（大端），同 eet **RS** |
+| `RS` | 同上 |
+| `RS_ASN1` | ASN.1 DER **SEQUENCE { INTEGER r, INTEGER s }**，同 eet 默认签名输出 |
+
+DER 编解码亦可单独使用 `encode_sm2_signature_der` / `decode_sm2_signature_der`（[`serialization.py`](../../pygmssl/src/gmssl/hazmat/primitives/serialization.py)）。
+
 ---
 
 ## 5. 公钥加密
@@ -122,6 +134,22 @@ flowchart TD
 ```
 
 密文格式：`C1(65B) || C3(32B) || C2(variable)`，其中 C1 为未压缩点（04 || x || y）。
+
+### 5.3 与 eet 一致的密文模式（pygmssl hazmat）
+
+`SM2PublicKey.encrypt` / `SM2PrivateKey.decrypt` 的 `ciphertext_format` 与 **eet** `sm2 encrypt` / `sm2 decrypt` 的 `-m` 对齐；默认 `None` 表示 **65 字节 C1** 的 C1→C3→C2 拼接。
+
+| `ciphertext_format` | 说明 |
+|---------------------|------|
+| `None`（默认） | C1：65B 未压缩点（0x04 + x + y）；后接 C3（32B）、C2 |
+| `C1C3C2` | raw：C1 为 64B（x + y），顺序为 C1、C3、C2 |
+| `C1C2C3` | raw：C1 为 64B（x + y），顺序为 C1、C2、C3 |
+| `C1C3C2_ASN1` | DER SEQUENCE：INTEGER x，INTEGER y，OCTET STRING C3，OCTET STRING C2 |
+| `C1C2C3_ASN1` | DER SEQUENCE：INTEGER x，INTEGER y，OCTET STRING C2，OCTET STRING C3 |
+
+### 5.4 PKCS#8 加密私钥 PEM（与 eet / GmSSL）
+
+`gmssl.hazmat.primitives.serialization` 支持 **EncryptedPrivateKeyInfo**：**PBES2** → **PBKDF2**（PRF 为 **HMAC-SM3**，OID `1.2.156.10197.1.401.2`）+ **SM4-CBC**（PKCS#7 填充），默认 PBKDF2 迭代 **65536**，与 **eet `sm2 generate`** 一致。解密后的内层 PKCS#8 使用 **`id-ecPublicKey`（1.2.840.10045.2.1）** 与 **SM2 命名曲线 OID**，且 SEC1 `ECPrivateKey` 携带 **`[0]` 命名曲线** 与 **`[1]` 公钥**，以便 GmSSL / **eet `sm2 sign -f`** 读取 pygmssl 导出的加密 PEM。明文 `PRIVATE KEY`（双 SM2 OID 的 `AlgorithmIdentifier`）仍保留为库内默认编码；与 eet 线工具互换加密私钥时，应使用 `encode_sm2_private_key_pkcs8_encrypted` / `load_pem_private_key(..., password)`。
 
 ---
 
@@ -181,8 +209,8 @@ Z = \mathrm{SM3}(\mathrm{ENTL} \| \mathrm{ID} \| a \| b \| x_G \| y_G \| x_A \| 
 |--------|-------------|
 | `sm2_do_sign` | `sm2_sign` |
 | `sm2_do_verify` | `sm2_verify` |
-| `sm2_do_encrypt` | `sm2_encrypt` |
-| `sm2_do_decrypt` | `sm2_decrypt` |
+| `sm2_do_encrypt` | `sm2_encrypt`（可选 `ciphertext_format`，见 §5.3） |
+| `sm2_do_decrypt` | `sm2_decrypt`（同上） |
 | `sm2_key_generate` | `sm2_generate_keypair` |
 | `sm2_compute_z` | `compute_z` |
 | 点运算 (ec.c) | `point_add`, `point_double`, `scalar_multiply` |

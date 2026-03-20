@@ -1,0 +1,16 @@
+# 虚拟环境与字节码
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 工具缓存（若在本目录跑 pytest / 类型检查）
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 运行产物：JSONL、聚合 JSON、大体积输入、临时 PEM 等（由 shell/run_all.sh 与各 crosscheck 生成）
+results/*
+
+*.tmp

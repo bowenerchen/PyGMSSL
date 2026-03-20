@@ -3,7 +3,15 @@
 import os
 import pytest
 from gmssl.hazmat.primitives.asymmetric import sm2
-from gmssl._backends._sm2_algo import SM2_MAX_PLAINTEXT_SIZE
+from gmssl._backends._sm2_algo import SM2_MAX_PLAINTEXT_SIZE, sm2_decrypt
+from gmssl._backends._sm2_ciphertext import (
+    SM2_EET_CIPHERTEXT_FORMATS,
+    encode_sm2_ciphertext,
+    normalize_sm2_ciphertext,
+    validate_sm2_ciphertext_format,
+)
+from gmssl._backends._sm2_signature import validate_sm2_signature_format
+from gmssl.hazmat.primitives import serialization
 from gmssl.exceptions import InvalidSignature
 
 
@@ -72,6 +80,41 @@ class TestSM2SignVerify:
         sig = key.sign(b"hello", uid=uid)
         key.public_key().verify(sig, b"hello", uid=uid)
 
+    @pytest.mark.parametrize("fmt", [None, "RS"])
+    def test_sign_verify_rs_explicit_or_default(self, fmt):
+        key = sm2.generate_private_key()
+        pub = key.public_key()
+        data = b"rs-format-msg"
+        sig = key.sign(data, signature_format=fmt)
+        assert len(sig) == 64
+        pub.verify(sig, data, signature_format=fmt)
+
+    def test_sign_verify_rs_asn1(self):
+        key = sm2.generate_private_key()
+        pub = key.public_key()
+        data = b"asn1-sig-msg"
+        der = key.sign(data, signature_format="RS_ASN1")
+        assert der[0] == 0x30
+        pub.verify(der, data, signature_format="RS_ASN1")
+
+    def test_encode_decode_der_matches_sign_rs_asn1(self):
+        key = sm2.generate_private_key()
+        pub = key.public_key()
+        data = b"codec"
+        rs = key.sign(data)
+        der = serialization.encode_sm2_signature_der(rs)
+        assert serialization.decode_sm2_signature_der(der) == rs
+        pub.verify(der, data, signature_format="RS_ASN1")
+        der2 = key.sign(data, signature_format="RS_ASN1")
+        pub.verify(der2, data, signature_format="RS_ASN1")
+
+    def test_invalid_signature_format_raises(self):
+        key = sm2.generate_private_key()
+        with pytest.raises(ValueError, match="signature_format"):
+            key.sign(b"x", signature_format="BAD")
+        with pytest.raises(ValueError, match="signature_format"):
+            validate_sm2_signature_format("BAD")
+
 
 class TestSM2EncryptDecrypt:
     def test_encrypt_plaintext_exceeds_gmt_limit(self):
@@ -94,6 +137,31 @@ class TestSM2EncryptDecrypt:
             ct = key.public_key().encrypt(data)
             pt = key.decrypt(ct)
             assert pt == data
+
+    @pytest.mark.parametrize("fmt", sorted(SM2_EET_CIPHERTEXT_FORMATS))
+    def test_encrypt_decrypt_eet_ciphertext_formats(self, fmt):
+        key = sm2.generate_private_key()
+        pub = key.public_key()
+        pt = b"eet-format-roundtrip"
+        ct = pub.encrypt(pt, ciphertext_format=fmt)
+        assert key.decrypt(ct, ciphertext_format=fmt) == pt
+
+    def test_none_ciphertext_format_is_identity_encode_decode(self):
+        key = sm2.generate_private_key()
+        pub = key.public_key()
+        pt = b"x"
+        canonical = pub.encrypt(pt)
+        assert encode_sm2_ciphertext(canonical, None) == canonical
+        assert normalize_sm2_ciphertext(canonical, None) == canonical
+        assert key.decrypt(canonical, ciphertext_format=None) == pt
+        assert sm2_decrypt(key.private_key_int, canonical, ciphertext_format=None) == pt
+
+    def test_invalid_ciphertext_format_raises(self):
+        key = sm2.generate_private_key()
+        with pytest.raises(ValueError, match="ciphertext_format"):
+            key.public_key().encrypt(b"x", ciphertext_format="NO_SUCH")
+        with pytest.raises(ValueError, match="ciphertext_format"):
+            validate_sm2_ciphertext_format("BAD")
 
 
 class TestSM2ECDH:

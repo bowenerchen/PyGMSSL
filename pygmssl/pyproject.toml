@@ -24,3 +24,6 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "slow: PBKDF2-heavy tests (e.g. 65536 iterations)",
+]

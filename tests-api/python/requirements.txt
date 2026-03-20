@@ -1,0 +1,4 @@
+# Install pygmssl from repo root (editable) + dev deps:
+#   pip install -e ../pygmssl[dev]
+# Optional (for aggregate tooling only):
+cryptography>=42.0.0

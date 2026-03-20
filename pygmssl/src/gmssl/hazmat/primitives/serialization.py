@@ -17,7 +17,11 @@ from enum import Enum
 from gmssl._backends._asn1 import (
     encode_sequence, encode_integer, encode_octet_string,
     encode_oid, encode_null, encode_context, encode_bit_string,
-    decode_tlv, TAG_SEQUENCE,
+    decode_tlv, decode_integer, TAG_SEQUENCE,
+)
+from gmssl._backends._pkcs8_pbes2_sm4 import (
+    decrypt_pkcs8_private_key_der,
+    encrypt_pkcs8_private_key_der,
 )
 
 
@@ -49,6 +53,8 @@ class BestAvailableEncryption:
 # SM2 OID: 1.2.156.10197.1.301
 SM2_OID = (1, 2, 156, 10197, 1, 301)
 SM2_CURVE_OID = (1, 2, 156, 10197, 1, 301)
+# id-ecPublicKey — used with SM2 named curve OID in GmSSL / eet PKCS#8 (see RFC 5480)
+EC_PUBLIC_KEY_OID = (1, 2, 840, 10045, 2, 1)
 
 
 def _pem_encode(der_data: bytes, label: str) -> bytes:
@@ -69,6 +75,52 @@ def _pem_decode(pem_data: bytes) -> tuple[bytes, str]:
     label = begin_line.replace('-----BEGIN ', '').replace('-----', '').strip()
     b64_data = ''.join(lines[1:-1])
     return (base64.b64decode(b64_data), label)
+
+
+def encode_sm2_private_key_pkcs8_encrypted(
+    private_key_bytes: bytes,
+    public_key_bytes: bytes,
+    password: bytes,
+    *,
+    iterations: int = 65536,
+    salt: bytes | None = None,
+    iv: bytes | None = None,
+) -> bytes:
+    """Encode SM2 private key as PKCS#8 EncryptedPrivateKeyInfo DER (eet-compatible).
+
+    Uses PBES2 with PBKDF2-HMAC-SM3 and SM4-CBC (PKCS#7 padding). Default
+    *iterations* is 65536 to match ``eet sm2 generate`` / GmSSL.
+
+    The decrypted inner structure uses ``id-ecPublicKey`` + SM2 curve OID so that
+    ``eet sm2 sign`` / GmSSL can load the PEM (see :func:`encode_sm2_private_key_pkcs8_gmssl`).
+    """
+    plain = encode_sm2_private_key_pkcs8_gmssl(private_key_bytes, public_key_bytes)
+    return encrypt_pkcs8_private_key_der(
+        plain, password, iterations=iterations, salt=salt, iv=iv
+    )
+
+
+def encode_sm2_private_key_pkcs8_gmssl(private_key_bytes: bytes, public_key_bytes: bytes) -> bytes:
+    """PKCS#8 PrivateKeyInfo DER matching GmSSL / eet ``sm2 generate`` (inner algorithm).
+
+    ``AlgorithmIdentifier`` is ``id-ecPublicKey`` with SM2 named curve parameters;
+    the private key field is a SEC1 ``ECPrivateKey`` (same as :func:`encode_sm2_private_key_pkcs8`).
+    """
+    alg_id = encode_sequence(
+        [encode_oid(EC_PUBLIC_KEY_OID), encode_oid(SM2_CURVE_OID)]
+    )
+    # Match GmSSL/eet SEC1 ECPrivateKey: optional [0] namedCurve inside the key SEQUENCE.
+    ec_privkey = encode_sequence([
+        encode_integer(1),
+        encode_octet_string(private_key_bytes),
+        encode_context(0, encode_oid(SM2_CURVE_OID)),
+        encode_context(1, encode_bit_string(public_key_bytes)),
+    ])
+    return encode_sequence([
+        encode_integer(0),
+        alg_id,
+        encode_octet_string(ec_privkey),
+    ])
 
 
 def encode_sm2_private_key_pkcs8(private_key_bytes: bytes, public_key_bytes: bytes) -> bytes:
@@ -107,13 +159,48 @@ def encode_sm2_signature_der(signature: bytes) -> bytes:
     return encode_sequence([encode_integer(r), encode_integer(s)])
 
 
+def decode_sm2_signature_der(der: bytes) -> bytes:
+    """Decode ASN.1 DER SEQUENCE of two INTEGERs (r, s) to 64 bytes r||s.
+
+    Matches eet ``-m RS_ASN1`` / GmSSL DER signatures.
+    """
+    tag, seq, _ = decode_tlv(der, 0)
+    if tag != TAG_SEQUENCE:
+        raise ValueError("Expected SEQUENCE for SM2 signature DER")
+    p = 0
+    r, p = decode_integer(seq, p)
+    s, p = decode_integer(seq, p)
+    rb = int(r).to_bytes(32, "big")
+    sb = int(s).to_bytes(32, "big")
+    if len(rb) > 32 or len(sb) > 32:
+        rb = rb.rjust(32, b"\x00")[-32:]
+        sb = sb.rjust(32, b"\x00")[-32:]
+    return rb + sb
+
+
 def load_pem_private_key(data: bytes, password: bytes | None = None):
-    """Load a PEM-encoded private key."""
-    if password is not None:
-        raise ValueError(
-            "Encrypted private keys are not supported; password must be None"
-        )
+    """Load a PEM-encoded private key.
+
+    Supports plaintext ``PRIVATE KEY`` (PKCS#8) and ``ENCRYPTED PRIVATE KEY``
+    (PBES2 / PBKDF2-HMAC-SM3 / SM4-CBC, compatible with eet). For encrypted
+    PEM, *password* must be ``bytes``; for plaintext PEM, *password* must be
+    ``None``.
+    """
     der, label = _pem_decode(data)
+    if label == "ENCRYPTED PRIVATE KEY" or (
+        "ENCRYPTED" in label and "PRIVATE" in label
+    ):
+        if password is None:
+            raise TypeError(
+                "Encrypted private key requires password as bytes, not None"
+            )
+        plain = decrypt_pkcs8_private_key_der(der, password)
+        return _load_sm2_private_key_pkcs8(plain)
+    if password is not None:
+        raise TypeError(
+            "Password was given but private key is not encrypted; "
+            "use password=None for plaintext PEM"
+        )
     if 'SM2' in label or 'PRIVATE' in label:
         return _load_sm2_private_key_pkcs8(der)
     raise ValueError(f"Unknown PEM label: {label}")

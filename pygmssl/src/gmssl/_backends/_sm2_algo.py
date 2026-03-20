@@ -11,6 +11,11 @@ from gmssl._backends._sm2_field import (
     is_on_curve,
 )
 from gmssl._backends._sm3 import SM3State
+from gmssl._backends._sm2_ciphertext import (
+    encode_sm2_ciphertext,
+    normalize_sm2_ciphertext,
+    validate_sm2_ciphertext_format,
+)
 
 SM2_DEFAULT_ID = b"1234567812345678"
 
@@ -123,11 +128,13 @@ def sm2_verify(pub_x, pub_y, message, r, s, uid=SM2_DEFAULT_ID):
     return R_ == r
 
 
-def sm2_encrypt(pub_x, pub_y, plaintext):
+def sm2_encrypt(pub_x, pub_y, plaintext, ciphertext_format=None):
     """SM2 public key encryption.
-    Returns ciphertext: C1 || C3 || C2
-    C1 = point kG (uncompressed 65 bytes), C3 = SM3 hash (32 bytes), C2 = encrypted data
+
+    Default (ciphertext_format None): C1(65B uncompressed) || C3(32) || C2.
+    Other values match eet ``-m``: C1C3C2, C1C2C3, C1C3C2_ASN1, C1C2C3_ASN1.
     """
+    validate_sm2_ciphertext_format(ciphertext_format)
     if not plaintext:
         raise ValueError("Plaintext must not be empty")
     if len(plaintext) > SM2_MAX_PLAINTEXT_SIZE:
@@ -165,13 +172,18 @@ def sm2_encrypt(pub_x, pub_y, plaintext):
         C3 = h.finalize()
 
         C1 = point_to_bytes(x1, y1)
-        return C1 + C3 + C2
+        canonical = C1 + C3 + C2
+        return encode_sm2_ciphertext(canonical, ciphertext_format)
 
 
-def sm2_decrypt(private_key_int, ciphertext):
+def sm2_decrypt(private_key_int, ciphertext, ciphertext_format=None):
     """SM2 private key decryption.
-    Input: C1(65 bytes) || C3(32 bytes) || C2(variable)
+
+    Default (ciphertext_format None): input C1(65B) || C3(32) || C2.
+    Other values match eet ``-m`` for wire decoding before decrypt.
     """
+    validate_sm2_ciphertext_format(ciphertext_format)
+    ciphertext = normalize_sm2_ciphertext(ciphertext, ciphertext_format)
     if len(ciphertext) < 98:
         raise ValueError("Ciphertext too short (minimum 98 bytes: 65 C1 + 32 C3 + 1 C2)")
     from gmssl.hazmat.primitives.kdf.sm3kdf import sm3_kdf

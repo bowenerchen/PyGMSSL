@@ -2,6 +2,8 @@
 
 GmSSL Python SDK 是采用 Python 实现的中国商用密码算法库，遵循 Python `cryptography` 库的 API 风格，提供 SM2、SM3、SM4、SM9、ZUC 等国密算法支持。
 
+**实现渊源**：当前 Python 代码系在 **GmSSL 3.1.1**（GMSSL-3.1.1 源码树）基础上**对照重构**而来。**GmSSL** 由 **Guan Zhi (GUANZHI) 团队**开源，仓库：<https://github.com/guanzhi/GmSSL>。
+
 ## 项目简介
 
 本 SDK 实现国家密码管理局发布的商用密码算法标准，适用于国密合规应用的开发与集成。API 采用 cryptography 风格的分层设计，便于上手和集成。
